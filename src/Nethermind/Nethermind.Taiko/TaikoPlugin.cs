@@ -16,7 +16,7 @@ using Nethermind.Consensus.Producers;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Specs;
-using Nethermind.Db;
+using Nethermind.Evm.Precompiles;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.JsonRpc.Client;
 using Nethermind.JsonRpc.Modules;
@@ -29,6 +29,8 @@ using Nethermind.Specs.ChainSpecStyle;
 using Nethermind.Serialization.Rlp;
 using Autofac;
 using Autofac.Core;
+using Nethermind.Init.Modules;
+using Nethermind.Core.Container;
 using Nethermind.JsonRpc.Modules.Eth.GasPrice;
 using Nethermind.Serialization.Json;
 using Nethermind.Taiko.BlockTransactionExecutors;
@@ -58,10 +60,32 @@ public class TaikoPlugin(ChainSpec chainSpec) : IConsensusPlugin
 
         _api.BlockPreprocessor.AddFirst(new MergeProcessingRecoveryStep(_api.Context.Resolve<IPoSSwitcher>()));
 
+        InitializeL1SloadIfEnabled();
+
         return Task.CompletedTask;
     }
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    private void InitializeL1SloadIfEnabled()
+    {
+        ArgumentNullException.ThrowIfNull(_api?.SpecProvider);
+
+        var taikoSpec = (TaikoReleaseSpec)_api.SpecProvider.GetFinalSpec();
+
+        if (!taikoSpec.IsRip7728Enabled)
+            return;
+
+        ISurgeConfig surgeConfig = _api.Context.Resolve<ISurgeConfig>();
+
+        if (string.IsNullOrEmpty(surgeConfig.L1EthApiEndpoint))
+            throw new ArgumentException($"{nameof(surgeConfig.L1EthApiEndpoint)} must be provided in the Surge configuration to use L1SLOAD precompile");
+
+        var storageProvider = new JsonRpcL1StorageProvider(
+            surgeConfig.L1EthApiEndpoint,
+            _api.Context.Resolve<IJsonSerializer>(),
+            _api.Context.Resolve<ILogManager>());
+
+        L1SloadPrecompile.L1StorageProvider = storageProvider;
+    }
 
     public bool MustInitialize => true;
 
@@ -103,8 +127,7 @@ public class TaikoModule : Module
 
             // L1 origin store
             .AddSingleton<IRlpStreamDecoder<L1Origin>, L1OriginDecoder>()
-            .AddKeyedSingleton<IDb>(L1OriginStore.L1OriginDbName, ctx => ctx
-                .Resolve<IDbFactory>().CreateDb(new DbSettings(L1OriginStore.L1OriginDbName, L1OriginStore.L1OriginDbName.ToLower())))
+            .AddDatabase(L1OriginStore.L1OriginDbName, L1OriginStore.L1OriginDbName, L1OriginStore.L1OriginDbName.ToLower())
             .AddSingleton<IL1OriginStore, L1OriginStore>()
 
             // Sync modification
@@ -123,7 +146,8 @@ public class TaikoModule : Module
             .AddSingleton<IUnclesValidator>(Always.Valid)
 
             // Blok processing
-            .AddScoped<IValidationTransactionExecutor, TaikoBlockValidationTransactionExecutor>()
+            .AddSingleton<IBlockValidationModule, TaikoBlockValidationModule>()
+            .AddSingleton<IMainProcessingModule, TaikoMainBlockProcessingModule>()
             .AddScoped<ITransactionProcessor, TaikoTransactionProcessor>()
             .AddScoped<IBlockProducerEnvFactory, TaikoBlockProductionEnvFactory>()
 
@@ -196,6 +220,22 @@ public class TaikoModule : Module
             txDecoder);
 
         return payloadPreparationService;
+    }
+
+    private class TaikoBlockValidationModule : Module, IBlockValidationModule
+    {
+        protected override void Load(ContainerBuilder builder)
+        {
+            builder.AddScoped<IBlockProcessor.IBlockTransactionsExecutor, TaikoBlockValidationTransactionExecutor>();
+        }
+    }
+
+    private class TaikoMainBlockProcessingModule : Module, IMainProcessingModule
+    {
+        protected override void Load(ContainerBuilder builder)
+        {
+            builder.AddScoped<IBlockProcessor.IBlockTransactionsExecutor, BlockInvalidTxExecutor>();
+        }
     }
 
 }

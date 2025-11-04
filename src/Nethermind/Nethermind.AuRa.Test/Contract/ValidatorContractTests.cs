@@ -30,16 +30,19 @@ namespace Nethermind.AuRa.Test.Contract
         private readonly Address _contractAddress = Address.FromNumber(long.MaxValue);
         private ITransactionProcessor _transactionProcessor;
         private IReadOnlyTxProcessorSource _readOnlyTxProcessorSource;
-        private IVisitingWorldState _stateProvider;
+        private IWorldState _stateProvider;
 
         [SetUp]
         public void SetUp()
         {
             _block = new Block(Build.A.BlockHeader.WithStateRoot(TestItem.KeccakA).TestObject, new BlockBody());
             _transactionProcessor = Substitute.For<ITransactionProcessor>();
-            _stateProvider = Substitute.For<IVisitingWorldState>();
+            _stateProvider = Substitute.For<IWorldState>();
             _readOnlyTxProcessorSource = Substitute.For<IReadOnlyTxProcessorSource>();
-            _readOnlyTxProcessorSource.Build(_block.Header).Returns(new ReadOnlyTxProcessingScope(_transactionProcessor, _stateProvider));
+            _readOnlyTxProcessorSource.Build(_block.Header).Returns(new ReadOnlyTxProcessingScope(
+                _transactionProcessor,
+                new Reactive.AnonymousDisposable(() => { }),
+                _stateProvider));
         }
 
         [Test]
@@ -82,8 +85,9 @@ namespace Nethermind.AuRa.Test.Contract
 
             contract.FinalizeChange(_block.Header);
 
+            _transactionProcessor.Received().SetBlockExecutionContext(Arg.Is<BlockHeader>(header => header.Equals(_block.Header)));
             _transactionProcessor.Received().Execute(
-                Arg.Is<Transaction>(t => IsEquivalentTo(expectation, t)), Arg.Is<BlockHeader>(header => header.Equals(_block.Header)), Arg.Any<ITxTracer>());
+                Arg.Is<Transaction>(t => IsEquivalentTo(expectation, t)), Arg.Any<ITxTracer>());
         }
 
         private static bool IsEquivalentTo(Transaction expected, Transaction item)

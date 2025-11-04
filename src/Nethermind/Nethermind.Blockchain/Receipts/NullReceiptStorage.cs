@@ -13,7 +13,8 @@ namespace Nethermind.Blockchain.Receipts
         public static NullReceiptStorage Instance { get; } = new();
 
 #pragma warning disable CS0067
-        public event EventHandler<BlockReplacementEventArgs> ReceiptsInserted;
+        public event EventHandler<BlockReplacementEventArgs>? NewCanonicalReceipts;
+        public event EventHandler<ReceiptsEventArgs>? ReceiptsInserted;
 #pragma warning restore CS0067
 
         public Hash256? FindBlockHash(Hash256 hash) => null;
@@ -43,6 +44,10 @@ namespace Nethermind.Blockchain.Receipts
         }
 
         public void EnsureCanonical(Block block)
+        {
+        }
+
+        public void RemoveReceipts(Block block)
         {
         }
     }

@@ -8,6 +8,7 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Evm;
 using Nethermind.Evm.Tracing;
+using Nethermind.Blockchain.Tracing;
 using Nethermind.Int256;
 using Nethermind.Serialization.Rlp;
 using Nethermind.State;
@@ -102,7 +103,7 @@ public class T8nExecutionResult
 
     private static AccountState? GetAccountState(Address address, IWorldState stateProvider, StorageTxTracer storageTxTracer)
     {
-        if (!stateProvider.AccountExists(address))  return null;
+        if (!stateProvider.AccountExists(address)) return null;
 
         stateProvider.TryGetAccount(address, out var account);
         var code = stateProvider.GetCode(address);

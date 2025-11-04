@@ -19,7 +19,6 @@ using Nethermind.Trie;
 using Nethermind.TxPool;
 using Block = Nethermind.Core.Block;
 using System.Threading;
-using Nethermind.Consensus.Processing;
 using Nethermind.Core.Specs;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Facade.Filters;
@@ -30,6 +29,7 @@ using Nethermind.Facade.Proxy.Models.Simulate;
 using Nethermind.Facade.Simulate;
 using Transaction = Nethermind.Core.Transaction;
 using Autofac;
+using Nethermind.Blockchain.Tracing;
 using Nethermind.Consensus;
 using Nethermind.Evm.State;
 using Nethermind.State.OverridableEnv;
@@ -39,7 +39,7 @@ namespace Nethermind.Facade
     [Todo(Improve.Refactor, "I want to remove BlockchainBridge, split it into something with logging, state and tx processing. Then we can start using independent modules.")]
     public class BlockchainBridge(
         IOverridableEnv<BlockchainBridge.BlockProcessingComponents> processingEnv,
-        SimulateReadOnlyBlocksProcessingEnv simulateProcessingEnv,
+        Lazy<ISimulateReadOnlyBlocksProcessingEnv> lazySimulateProcessingEnv,
         IBlockTree blockTree,
         IStateReader stateReader,
         ITxPool txPool,
@@ -80,9 +80,13 @@ namespace Nethermind.Facade
                 if (block is not null)
                 {
                     receipts = receiptStorage.Get(block);
-                    receipt = receipts.ForTransaction(txHash);
-                    transaction = block.Transactions[receipt.Index];
-                    return true;
+                    int txIndex = block.GetTransactionIndex(txHash.ValueHash256);
+                    if (txIndex != -1)
+                    {
+                        transaction = block.Transactions[txIndex];
+                        receipt = receipts.Length > txIndex && receipts[txIndex].TxHash == txHash ? receipts[txIndex] : null;
+                        return true;
+                    }
                 }
             }
 
@@ -93,16 +97,16 @@ namespace Nethermind.Facade
             return false;
         }
 
-        public (TxReceipt? Receipt, TxGasInfo? GasInfo, int LogIndexStart) GetReceiptAndGasInfo(Hash256 txHash)
+        public (TxReceipt? Receipt, ulong BlockTimestamp, TxGasInfo? GasInfo, int LogIndexStart) GetTxReceiptInfo(Hash256 txHash)
         {
             if (TryGetCanonicalTransaction(txHash, out Transaction? tx, out TxReceipt? txReceipt, out Block? block, out TxReceipt[]? txReceipts))
             {
                 int logIndexStart = txReceipts.GetBlockLogFirstIndex(txReceipt.Index);
                 IReleaseSpec spec = specProvider.GetSpec(block.Header);
-                return (txReceipt, tx.GetGasInfo(spec, block.Header), logIndexStart);
+                return (txReceipt, block.Timestamp, tx.GetGasInfo(spec, block.Header), logIndexStart);
             }
 
-            return (null, null, 0);
+            return (null, 0, null, 0);
         }
 
         public (TxReceipt? Receipt, Transaction Transaction, UInt256? baseFee) GetTransaction(Hash256 txHash, bool checkTxnPool = true) =>
@@ -128,19 +132,20 @@ namespace Nethermind.Facade
 
             return new CallOutput
             {
-                Error = ConstructError(tryCallResult, callOutputTracer.Error, tx.GasLimit),
+                Error = ConstructError(tryCallResult, callOutputTracer.Error),
                 GasSpent = callOutputTracer.GasSpent,
                 OutputData = callOutputTracer.ReturnValue,
-                InputError = !tryCallResult.Success
+                InputError = !tryCallResult.TransactionExecuted,
+                ExecutionReverted = tryCallResult.EvmExceptionType == EvmExceptionType.Revert,
             };
         }
 
-        public SimulateOutput<TTrace> Simulate<TTrace>(BlockHeader header, SimulatePayload<TransactionWithSourceDetails> payload, ISimulateBlockTracerFactory<TTrace> simulateBlockTracerFactory, CancellationToken cancellationToken)
+        public SimulateOutput<TTrace> Simulate<TTrace>(BlockHeader header, SimulatePayload<TransactionWithSourceDetails> payload, ISimulateBlockTracerFactory<TTrace> simulateBlockTracerFactory, long gasCapLimit, CancellationToken cancellationToken)
         {
-            using SimulateReadOnlyBlocksProcessingScope env = simulateProcessingEnv.Begin(header);
+            using SimulateReadOnlyBlocksProcessingScope env = lazySimulateProcessingEnv.Value.Begin(header);
             env.SimulateRequestState.Validate = payload.Validation;
             IBlockTracer<TTrace> tracer = simulateBlockTracerFactory.CreateSimulateBlockTracer(payload.TraceTransfers, env.WorldState, specProvider, header);
-            return _simulateBridgeHelper.TrySimulate(header, payload, tracer, env, cancellationToken);
+            return _simulateBridgeHelper.TrySimulate(header, payload, tracer, env, gasCapLimit, cancellationToken);
         }
 
         public CallOutput EstimateGas(BlockHeader header, Transaction tx, int errorMargin, Dictionary<Address, AccountOverride>? stateOverride, CancellationToken cancellationToken)
@@ -154,7 +159,7 @@ namespace Nethermind.Facade
 
             GasEstimator gasEstimator = new(components.TransactionProcessor, components.WorldState, specProvider, blocksConfig);
 
-            string? error = ConstructError(tryCallResult, estimateGasTracer.Error, tx.GasLimit);
+            string? error = ConstructError(tryCallResult, estimateGasTracer.Error);
 
             long estimate = gasEstimator.Estimate(tx, header, estimateGasTracer, out string? err, errorMargin, cancellationToken);
             if (err is not null)
@@ -166,7 +171,9 @@ namespace Nethermind.Facade
             {
                 Error = error,
                 GasSpent = estimate,
-                InputError = !tryCallResult.Success || err is not null
+                OutputData = estimateGasTracer.ReturnValue,
+                InputError = !tryCallResult.TransactionExecuted || err is not null,
+                ExecutionReverted = tryCallResult.EvmExceptionType == EvmExceptionType.Revert
             };
         }
 
@@ -187,12 +194,12 @@ namespace Nethermind.Facade
 
             return new CallOutput
             {
-                Error = ConstructError(tryCallResult, callOutputTracer.Error, tx.GasLimit),
+                Error = ConstructError(tryCallResult, callOutputTracer.Error),
                 GasSpent = accessTxTracer.GasSpent,
                 OperationGas = callOutputTracer.OperationGas,
                 OutputData = callOutputTracer.ReturnValue,
-                InputError = !tryCallResult.Success,
-                AccessList = accessTxTracer.AccessList
+                InputError = !tryCallResult.TransactionExecuted,
+                AccessList = accessTxTracer.AccessList,
             };
         }
 
@@ -207,9 +214,9 @@ namespace Nethermind.Facade
             {
                 return CallAndRestore(blockHeader, transaction, treatBlockHeaderAsParentBlock, tracer, components);
             }
-            catch (InsufficientBalanceException ex)
+            catch (InsufficientBalanceException)
             {
-                return new TransactionResult(ex.Message);
+                return TransactionResult.InsufficientSenderBalance;
             }
         }
 
@@ -220,7 +227,7 @@ namespace Nethermind.Facade
             ITxTracer tracer,
             BlockProcessingComponents components)
         {
-            transaction.SenderAddress ??= Address.SystemUser;
+            transaction.SenderAddress ??= Address.Zero;
 
             //Ignore nonce on all CallAndRestore calls
             transaction.Nonce = components.StateReader.GetNonce(blockHeader, transaction.SenderAddress);
@@ -234,7 +241,7 @@ namespace Nethermind.Facade
                     blockHeader.Number + 1,
                     blockHeader.GasLimit,
                     Math.Max(blockHeader.Timestamp + blocksConfig.SecondsPerSlot, timestamper.UnixTime.Seconds),
-                    Array.Empty<byte>())
+                    [])
                 : new(
                     blockHeader.ParentHash!,
                     blockHeader.UnclesHash!,
@@ -250,6 +257,8 @@ namespace Nethermind.Facade
                 ? BaseFeeCalculator.Calculate(blockHeader, releaseSpec)
                 : blockHeader.BaseFeePerGas;
 
+            UInt256 blobBaseFee = UInt256.Zero;
+
             if (releaseSpec.IsEip4844Enabled)
             {
                 callHeader.BlobGasUsed = BlobGasCalculator.CalculateBlobGas(transaction);
@@ -257,7 +266,7 @@ namespace Nethermind.Facade
                     ? BlobGasCalculator.CalculateExcessBlobGas(blockHeader, releaseSpec)
                     : blockHeader.ExcessBlobGas;
 
-                if (transaction.Type is TxType.Blob && transaction.MaxFeePerBlobGas is null && BlobGasCalculator.TryCalculateFeePerBlobGas(callHeader, releaseSpec.BlobBaseFeeUpdateFraction, out UInt256 blobBaseFee))
+                if (transaction.Type is TxType.Blob && transaction.MaxFeePerBlobGas is null && BlobGasCalculator.TryCalculateFeePerBlobGas(callHeader, releaseSpec.BlobBaseFeeUpdateFraction, out blobBaseFee))
                 {
                     transaction.MaxFeePerBlobGas = blobBaseFee;
                 }
@@ -265,7 +274,7 @@ namespace Nethermind.Facade
             callHeader.MixHash = blockHeader.MixHash;
             callHeader.IsPostMerge = blockHeader.Difficulty == 0;
             transaction.Hash = transaction.CalculateHash();
-            BlockExecutionContext blockExecutionContext = new(callHeader, releaseSpec, releaseSpec.BlobBaseFeeUpdateFraction);
+            BlockExecutionContext blockExecutionContext = new(callHeader, releaseSpec, blobBaseFee);
             return components.TransactionProcessor.CallAndRestore(transaction, in blockExecutionContext, tracer);
         }
 
@@ -389,16 +398,17 @@ namespace Nethermind.Facade
             return logFinder.FindLogs(filter, cancellationToken);
         }
 
-        private static string? ConstructError(TransactionResult txResult, string? tracerError, long gasLimit)
+        private static string? ConstructError(TransactionResult txResult, string? tracerError)
         {
             var error = txResult switch
             {
-                { Success: true } when tracerError is not null => tracerError,
-                { Success: false, Error: not null } => txResult.Error,
+                { TransactionExecuted: true } when txResult.EvmExceptionType is not (EvmExceptionType.None or EvmExceptionType.Revert) => txResult.EvmExceptionType.GetEvmExceptionDescription(),
+                { TransactionExecuted: true } when tracerError is not null => tracerError,
+                { TransactionExecuted: false, Error: not TransactionResult.ErrorType.None } => txResult.ErrorDescription,
                 _ => null
             };
 
-            return error is null ? null : $"err: {error} (supplied gas {gasLimit})";
+            return error;
         }
 
         public record BlockProcessingComponents(
@@ -414,7 +424,7 @@ namespace Nethermind.Facade
     }
 
     public class BlockchainBridgeFactory(
-        SimulateReadOnlyBlocksProcessingEnvFactory simulateEnvFactory,
+        ISimulateReadOnlyBlocksProcessingEnvFactory simulateEnvFactory,
         IOverridableEnvFactory envFactory,
         ILifetimeScope rootLifetimeScope
     ) : IBlockchainBridgeFactory
@@ -433,7 +443,7 @@ namespace Nethermind.Facade
 
             ILifetimeScope blockchainBridgeLifetime = rootLifetimeScope.BeginLifetimeScope((builder) => builder
                 .AddScoped<BlockchainBridge>()
-                .AddScoped<SimulateReadOnlyBlocksProcessingEnv>(simulateEnvFactory.Create())
+                .AddScoped<ISimulateReadOnlyBlocksProcessingEnv>((_) => simulateEnvFactory.Create())
                 .AddScoped(blockProcessingEnv));
 
             blockchainBridgeLifetime.Disposer.AddInstanceForAsyncDisposal(overridableScopeLifetime);

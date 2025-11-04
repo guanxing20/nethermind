@@ -42,10 +42,10 @@ public class NodeRecordSigner : INodeRecordSigner
         int startPosition = rlpStream.Position;
         int recordRlpLength = rlpStream.ReadSequenceLength();
         if (recordRlpLength > 300)
-            throw new NetworkingException("RLP recieved for ENR is bigger than 300 bytes", NetworkExceptionType.Discovery);
+            throw new NetworkingException("RLP received for ENR is bigger than 300 bytes", NetworkExceptionType.Discovery);
         NodeRecord nodeRecord = new();
 
-        ReadOnlySpan<byte> sigBytes = rlpStream.DecodeByteArraySpan();
+        ReadOnlySpan<byte> sigBytes = rlpStream.DecodeByteArraySpan(RlpLimit.L65);
         Signature signature = new(sigBytes, 0);
 
         bool canVerify = true;

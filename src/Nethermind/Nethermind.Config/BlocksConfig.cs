@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
-using System.Reflection;
 using System.Text;
 using Nethermind.Core;
 using Nethermind.Core.Exceptions;
@@ -59,6 +58,9 @@ namespace Nethermind.Config
         public ulong SecondsPerSlot { get; set; } = 12;
 
         public bool PreWarmStateOnBlockProcessing { get; set; } = true;
+
+        public bool CachePrecompilesOnBlockProcessing { get; set; } = true;
+
         public int PreWarmStateConcurrency { get; set; } = 0;
 
         public int BlockProductionTimeoutMs { get; set; } = 4_000;
@@ -86,6 +88,9 @@ namespace Nethermind.Config
                 _extraDataBytes = bytes;
             }
         }
+
+        public bool BuildBlocksOnMainState { get; set; }
+
         public byte[] GetExtraDataBytes()
         {
             return _extraDataBytes;

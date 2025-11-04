@@ -34,11 +34,11 @@ using Nethermind.Synchronization.Peers;
 using NSubstitute;
 using NUnit.Framework;
 using BlockTree = Nethermind.Blockchain.BlockTree;
-using System.Diagnostics.CodeAnalysis;
 using Autofac;
 using Autofac.Features.AttributeFilters;
 using Humanizer;
 using Nethermind.Config;
+using Nethermind.Consensus.Processing;
 using Nethermind.Core.Events;
 using Nethermind.Core.Test;
 using Nethermind.Core.Test.Modules;
@@ -206,6 +206,57 @@ public partial class BlockDownloaderTests
             CancellationToken.None);
 
         await act.Should().NotThrowAsync();
+    }
+
+    [Test]
+    public async Task Return_Null_On_InConsistentHeaderSequence()
+    {
+        using ArrayPoolList<BlockHeader?> headers = new ArrayPoolList<BlockHeader?>(1);
+        headers.Add(Build.A.EmptyBlockHeader);
+        headers.Add(Build.A.EmptyBlockHeader);
+
+        IForwardHeaderProvider mockForwardHeaderProvider = Substitute.For<IForwardHeaderProvider>();
+        mockForwardHeaderProvider.GetBlockHeaders(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IOwnedReadOnlyList<BlockHeader?>?>(headers));
+
+        await using IContainer node = CreateNode(configProvider: new ConfigProvider(new SyncConfig()
+        {
+            FastSync = true
+        }),
+            configurer: (builder) => builder.AddSingleton<IForwardHeaderProvider>(mockForwardHeaderProvider));
+
+        Context ctx = node.Resolve<Context>();
+        BlocksRequest? res = await ctx.FastSyncFeedComponent.BlockDownloader.PrepareRequest(
+            DownloaderOptions.Insert,
+            0,
+            CancellationToken.None);
+        res.Should().BeNull();
+    }
+
+    [Test]
+    public async Task Skit_spawning_request_when_block_processing_queue_is_high()
+    {
+        IForwardHeaderProvider mockForwardHeaderProvider = Substitute.For<IForwardHeaderProvider>();
+        IBlockProcessingQueue blockProcessingQueue = Substitute.For<IBlockProcessingQueue>();
+        blockProcessingQueue.Count.Returns(10000);
+
+        await using IContainer node = CreateNode(configProvider: new ConfigProvider(new SyncConfig()
+        {
+            FastSync = true
+        }),
+            configurer: (builder) => builder
+                .AddSingleton<IForwardHeaderProvider>(mockForwardHeaderProvider)
+                .AddSingleton<IBlockProcessingQueue>(blockProcessingQueue));
+
+        Context ctx = node.Resolve<Context>();
+        var request = await ctx.FastSyncFeedComponent.BlockDownloader.PrepareRequest(
+            DownloaderOptions.Insert,
+            0,
+            CancellationToken.None);
+
+        request.Should().BeNull();
+        await mockForwardHeaderProvider.DidNotReceive()
+            .GetBlockHeaders(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -492,7 +543,7 @@ public partial class BlockDownloaderTests
         await using IContainer node = CreateNode(builder => builder
             .AddDecorator<ISyncConfig>((_, syncConfig) =>
             {
-                syncConfig.MaxTxInForwardSyncBuffer = 3200;
+                syncConfig.ForwardSyncDownloadBufferMemoryBudget = 3200000;
                 return syncConfig;
             })
             .AddSingleton<IBlockValidator>(Always.Invalid));
@@ -600,161 +651,6 @@ public partial class BlockDownloaderTests
         {
             Thread.Sleep(1000);
             return true;
-        }
-    }
-
-    private class SlowHeaderValidator : IBlockValidator
-    {
-
-        public bool Validate(BlockHeader header, BlockHeader? parent, bool isUncle)
-        {
-            Thread.Sleep(1000);
-            return true;
-        }
-
-        public bool Validate(BlockHeader header, bool isUncle)
-        {
-            Thread.Sleep(1000);
-            return true;
-        }
-
-        public bool ValidateSuggestedBlock(Block block)
-        {
-            Thread.Sleep(1000);
-            return true;
-        }
-
-        public bool ValidateProcessedBlock(Block processedBlock, TxReceipt[] receipts, Block suggestedBlock)
-        {
-            Thread.Sleep(1000);
-            return true;
-        }
-
-        public bool ValidateWithdrawals(Block block, out string? error)
-        {
-            Thread.Sleep(1000);
-            error = string.Empty;
-            return true;
-        }
-
-        public bool ValidateOrphanedBlock(Block block, [NotNullWhen(false)] out string? error)
-        {
-            Thread.Sleep(1000);
-            error = null;
-            return true;
-        }
-
-        public bool ValidateSuggestedBlock(Block block, [NotNullWhen(false)] out string? error, bool validateHashes = true)
-        {
-            Thread.Sleep(1000);
-            error = null;
-            return true;
-        }
-
-        public bool ValidateProcessedBlock(Block processedBlock, TxReceipt[] receipts, Block suggestedBlock, [NotNullWhen(false)] out string? error)
-        {
-            Thread.Sleep(1000);
-            error = null;
-            return true;
-        }
-
-        public bool Validate(BlockHeader header, BlockHeader? parent, bool isUncle, [NotNullWhen(false)] out string? error)
-        {
-            Thread.Sleep(1000);
-            error = null;
-            return true;
-        }
-
-        public bool Validate(BlockHeader header, bool isUncle, [NotNullWhen(false)] out string? error)
-        {
-            Thread.Sleep(1000);
-            error = null;
-            return true;
-        }
-
-        public bool ValidateBodyAgainstHeader(BlockHeader header, BlockBody toBeValidated, [NotNullWhen(false)] out string? errorMessage)
-        {
-            Thread.Sleep(1000);
-            errorMessage = null;
-            return true;
-        }
-    }
-
-    private class ThrowingPeer : ISyncPeer
-    {
-        public ThrowingPeer(long number, UInt256? totalDiff, Hash256? headHash = null)
-        {
-            HeadNumber = number;
-            TotalDifficulty = totalDiff ?? UInt256.MaxValue;
-            HeadHash = headHash ?? Keccak.Zero;
-        }
-
-        public string Name => "Throwing";
-        public string ClientId => "EX peer";
-        public Node Node { get; } = null!;
-        public string ProtocolCode { get; } = null!;
-        public byte ProtocolVersion { get; } = default;
-        public Hash256 HeadHash { get; set; }
-        public long HeadNumber { get; set; }
-        public UInt256? TotalDifficulty { get; set; }
-        public bool IsInitialized { get; set; }
-        public bool IsPriority { get; set; }
-
-        public void Disconnect(DisconnectReason reason, string details)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<OwnedBlockBodies> GetBlockBodies(IReadOnlyList<Hash256> blockHashes, CancellationToken token)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IOwnedReadOnlyList<BlockHeader>?> GetBlockHeaders(Hash256 blockHash, int maxBlocks, int skip, CancellationToken token)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IOwnedReadOnlyList<BlockHeader>?> GetBlockHeaders(long number, int maxBlocks, int skip, CancellationToken token)
-        {
-            throw new Exception();
-        }
-
-        public Task<BlockHeader?> GetHeadBlockHeader(Hash256? hash, CancellationToken token)
-        {
-            throw new NotImplementedException();
-        }
-
-        public void NotifyOfNewBlock(Block block, SendBlockMode mode)
-        {
-            throw new NotImplementedException();
-        }
-
-        public PublicKey Id => Node.Id;
-
-        public void SendNewTransactions(IEnumerable<Transaction> txs, bool sendFullTx)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IOwnedReadOnlyList<TxReceipt[]?>> GetReceipts(IReadOnlyList<Hash256> blockHash, CancellationToken token)
-        {
-            throw new NotImplementedException();
-        }
-
-        public Task<IOwnedReadOnlyList<byte[]>> GetNodeData(IReadOnlyList<Hash256> hashes, CancellationToken token)
-        {
-            throw new NotImplementedException();
-        }
-
-        public void RegisterSatelliteProtocol<T>(string protocol, T protocolHandler) where T : class
-        {
-            throw new NotImplementedException();
-        }
-
-        public bool TryGetSatelliteProtocol<T>(string protocol, out T protocolHandler) where T : class
-        {
-            throw new NotImplementedException();
         }
     }
 

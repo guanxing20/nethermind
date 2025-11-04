@@ -33,21 +33,20 @@ jobs:
         project:
           - Ethereum.Abi.Test
           - Ethereum.Basic.Test
-          - Ethereum.Blockchain.Block.Legacy.Test
           - Ethereum.Blockchain.Block.Test
-          - Ethereum.Blockchain.Legacy.Test
           - Ethereum.Blockchain.Pyspec.Test
-          - Ethereum.Blockchain.Test
           - Ethereum.Difficulty.Test
           - Ethereum.HexPrefix.Test
           - Ethereum.KeyAddress.Test
           - Ethereum.KeyStore.Test
+          - Ethereum.Legacy.Blockchain.Block.Test
+          - Ethereum.Legacy.Blockchain.Test
+          - Ethereum.Legacy.Transition.Test
+          - Ethereum.Legacy.VM.Test
           - Ethereum.PoW.Test
           - Ethereum.Rlp.Test
           - Ethereum.Transaction.Test
-          - Ethereum.Transition.Test
           - Ethereum.Trie.Test
-          - Ethereum.VM.Test
           - Nethermind.Abi.Test
           - Nethermind.Api.Test
           - Nethermind.AuRa.Test
@@ -57,12 +56,14 @@ jobs:
           - Nethermind.Consensus.Test
           - Nethermind.Core.Test
           - Nethermind.Db.Test
+          - Nethermind.Era1.Test
           - Nethermind.Ethash.Test
           - Nethermind.EthStats.Test
           - Nethermind.Evm.Test
           - Nethermind.Facade.Test
           - Nethermind.Flashbots.Test
           - Nethermind.HealthChecks.Test
+          - Nethermind.History.Test
           - Nethermind.Hive.Test
           - Nethermind.JsonRpc.Test
           - Nethermind.JsonRpc.TraceStore.Test
@@ -77,7 +78,6 @@ jobs:
           - Nethermind.Network.Enr.Test
           - Nethermind.Network.Test
           - Nethermind.Optimism.Test
-          # - Nethermind.Overseer.Test
           - Nethermind.Runner.Test
           - Nethermind.Serialization.Ssz.Test
           - Nethermind.Shutter.Test
@@ -90,13 +90,14 @@ jobs:
           - Nethermind.Trie.Test
           - Nethermind.TxPool.Test
           - Nethermind.Wallet.Test
+          - Nethermind.Xdc.Test
     steps:
     - name: Check out repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         submodules: ${{ startsWith(matrix.project, 'Ethereum.') && 'recursive' || 'false' }}
     - name: Set up .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@v5
     - name: ${{ matrix.project }}
       id: test
       run: |

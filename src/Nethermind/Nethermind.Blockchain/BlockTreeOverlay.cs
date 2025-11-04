@@ -9,6 +9,7 @@ using Nethermind.Blockchain.Visitors;
 using Nethermind.Core;
 using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
+using Nethermind.State.Repositories;
 
 namespace Nethermind.Blockchain;
 
@@ -107,7 +108,7 @@ public class BlockTreeOverlay : IBlockTree
 
     public BlockInfo FindCanonicalBlockInfo(long blockNumber) => _overlayTree.FindCanonicalBlockInfo(blockNumber) ?? _baseTree.FindCanonicalBlockInfo(blockNumber);
 
-    public Hash256 FindHash(long blockNumber) => _overlayTree.FindHash(blockNumber) ?? _baseTree.FindHash(blockNumber);
+    public Hash256 FindBlockHash(long blockNumber) => _overlayTree.FindBlockHash(blockNumber) ?? _baseTree.FindBlockHash(blockNumber);
 
     public IOwnedReadOnlyList<BlockHeader> FindHeaders(Hash256 hash, int numberOfBlocks, int skip, bool reverse)
     {
@@ -221,6 +222,21 @@ public class BlockTreeOverlay : IBlockTree
         }
     }
 
+    public event EventHandler<IBlockTree.ForkChoiceUpdateEventArgs> OnForkChoiceUpdated
+    {
+        add
+        {
+            _baseTree.OnForkChoiceUpdated += value;
+            _overlayTree.OnForkChoiceUpdated += value;
+        }
+
+        remove
+        {
+            _baseTree.OnForkChoiceUpdated -= value;
+            _overlayTree.OnForkChoiceUpdated -= value;
+        }
+    }
+
     public int DeleteChainSlice(in long startNumber, long? endNumber = null, bool force = false) =>
         _overlayTree.DeleteChainSlice(startNumber, endNumber, force);
 
@@ -252,9 +268,6 @@ public class BlockTreeOverlay : IBlockTree
     public BlockHeader? FindHeader(long blockNumber, BlockTreeLookupOptions options) =>
         _overlayTree.FindHeader(blockNumber, options) ?? _baseTree.FindHeader(blockNumber, options);
 
-    public Hash256? FindBlockHash(long blockNumber) =>
-        _overlayTree.FindBlockHash(blockNumber) ?? _baseTree.FindBlockHash(blockNumber);
-
     public bool IsMainChain(BlockHeader blockHeader) =>
         _baseTree.IsMainChain(blockHeader) || _overlayTree.IsMainChain(blockHeader);
 
@@ -266,4 +279,9 @@ public class BlockTreeOverlay : IBlockTree
 
 
     public long GetLowestBlock() => _baseTree.GetLowestBlock();
+
+    public void NewOldestBlock(long oldestBlock) => _baseTree.NewOldestBlock(oldestBlock);
+
+    public void DeleteOldBlock(long blockNumber, Hash256 blockHash)
+        => _baseTree.DeleteOldBlock(blockNumber, blockHash);
 }

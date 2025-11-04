@@ -13,9 +13,9 @@
   "Sync": {
     "FastSync": true,
     "SnapSync": true,
-    "PivotNumber": 36400000,
-    "PivotHash": "0xa05aab97021365824b0c96f8afe8416d25fe1244b79c78ee69a7dc1e06e5aecd",
-    "PivotTotalDifficulty": "12386278155922160070066835710516362896611796376",
+    "PivotNumber": 37360000,
+    "PivotHash": "0x4fc22fa52dee1520d18188925eb93a1c653e7d3fc993180b8c48025084e4afd0",
+    "PivotTotalDifficulty": "12712949228166260994991675333650860379607509175",
     "UseGethLimitsInFastBlocks": false,
     "FastSyncCatchUpHeightDelta": 10000000000
   },
@@ -24,9 +24,6 @@
   },
   "Metrics": {
     "NodeName": "Energy_Web"
-  },
-  "Mining": {
-    "MinGasPrice": 1
   },
   "Blocks": {
     "GasToken": "EWT"

@@ -15,13 +15,13 @@ using Nethermind.Blockchain.Services;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Config;
 using Nethermind.Consensus;
+using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Producers;
 using Nethermind.Consensus.Rewards;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Exceptions;
-using Nethermind.Core.Timers;
 using Nethermind.Db;
 using Nethermind.Facade.Proxy;
 using Nethermind.HealthChecks;
@@ -215,9 +215,6 @@ public partial class MergePlugin(ChainSpec chainSpec, IMergeConfig mergeConfig) 
             _api.BlockProductionPolicy = _mergeBlockProductionPolicy;
             _api.FinalizationManager = InitializeMergeFinilizationManager();
 
-            // Need to do it here because blockprocessor is not available in init
-            _invalidChainTracker.SetupBlockchainProcessorInterceptor(_api.MainProcessingContext!.BlockchainProcessor!);
-
             if (_poSSwitcher.TransitionFinished)
             {
                 AddEth69();
@@ -242,8 +239,6 @@ public partial class MergePlugin(ChainSpec chainSpec, IMergeConfig mergeConfig) 
     {
         return new MergeFinalizationManager(_api.Context.Resolve<IManualBlockFinalizationManager>(), _api.FinalizationManager, _poSSwitcher);
     }
-
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public bool MustInitialize { get => true; }
 
@@ -290,6 +285,11 @@ public class BaseMergePluginModule : Module
                 .Bind<IPivot, IBeaconPivot>()
             .AddSingleton<InvalidChainTracker.InvalidChainTracker>()
                 .Bind<IInvalidChainTracker, InvalidChainTracker.InvalidChainTracker>()
+            .OnActivate<IMainProcessingContext>(((context, ctx) =>
+            {
+                ctx.Resolve<InvalidChainTracker.InvalidChainTracker>().SetupBlockchainProcessorInterceptor(context.BlockchainProcessor);
+            }))
+
             .AddSingleton<IPoSSwitcher, PoSSwitcher>()
             .AddDecorator<IBetterPeerStrategy, MergeBetterPeerStrategy>()
 
@@ -306,6 +306,8 @@ public class BaseMergePluginModule : Module
             .AddDecorator<ISealValidator, InvalidHeaderSealInterceptor>()
 
             .AddDecorator<IHealthHintService, MergeHealthHintService>()
+
+            .AddKeyedSingleton<ITxValidator>(ITxValidator.HeadTxValidatorKey, new HeadTxValidator())
 
             // Engine rpc related
             .RegisterSingletonJsonRpcModule<IEngineRpcModule, EngineRpcModule>()
@@ -333,8 +335,8 @@ public class BaseMergePluginModule : Module
                     IInitConfig initConfig = ctx.Resolve<IInitConfig>();
                     return new GCKeeper(
                         initConfig.DisableGcOnNewPayload
-                            ? NoGCStrategy.Instance
-                            : ctx.Resolve<NoSyncGcRegionStrategy>(),
+                            ? ctx.Resolve<NoSyncGcRegionStrategy>()
+                            : NoGCStrategy.Instance,
                         ctx.Resolve<ILogManager>());
                 })
             ;

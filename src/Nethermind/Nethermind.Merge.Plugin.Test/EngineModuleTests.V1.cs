@@ -19,6 +19,7 @@ using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Specs;
 using Nethermind.Core.Test.Builders;
+using Nethermind.Core.Test.Container;
 using Nethermind.Crypto;
 using Nethermind.Evm;
 using Nethermind.Facade.Eth;
@@ -139,7 +140,7 @@ public partial class EngineModuleTests
     public void ForkchoiceV1_ToString_returns_correct_results()
     {
         ForkchoiceStateV1 forkchoiceState = new(TestItem.KeccakA, TestItem.KeccakF, TestItem.KeccakC);
-        forkchoiceState.ToString().Should().Be("ForkChoice: 0x03783f...35b760, Safe: 0x017e66...b18f72, Finalized: 0xe61d9a...97c37a");
+        forkchoiceState.ToString().Should().Be("ForkChoice: 0x03783fac2efed8fbc9ad443e592ee30e61d65f471140c10ca155e937b435b760, Safe: 0x017e667f4b8c174291d1543c466717566e206df1bfd6f30271055ddafdb18f72, Finalized: 0xe61d9a3d3848fb2cdd9a2ab61e2f21a10ea431275aed628a0557f9dee697c37a");
     }
 
     [Test]
@@ -446,7 +447,7 @@ public partial class EngineModuleTests
             .Build(new TestSingleReleaseSpecProvider(London.Instance));
         IEngineRpcModule rpc = chain.EngineRpcModule;
 
-        ((TestBlockProcessorInterceptor)chain.BlockProcessor).ExceptionToThrow =
+        ((TestBranchProcessorInterceptor)chain.BranchProcessor).ExceptionToThrow =
             new Exception("unxpected exception");
 
         ExecutionPayload executionPayload = CreateBlockRequest(chain, CreateParentBlockRequestOnHead(chain.BlockTree), TestItem.AddressD);
@@ -658,7 +659,7 @@ public partial class EngineModuleTests
     {
         using MergeTestBlockchain chain = await CreateBlockchain(mergeConfig: new MergeConfig()
         {
-            NewPayloadTimeout = 0.1
+            NewPayloadBlockProcessingTimeout = 100
         });
 
         IEngineRpcModule rpc = chain.EngineRpcModule;
@@ -684,8 +685,7 @@ public partial class EngineModuleTests
     {
         using MergeTestBlockchain? chain = await CreateBlockchain(mergeConfig: new MergeConfig()
         {
-            NewPayloadTimeout = 0.1,
-            NewPayloadCacheSize = 0
+            NewPayloadBlockProcessingTimeout = 100
         });
 
         IEngineRpcModule? rpc = chain.EngineRpcModule;
@@ -719,8 +719,7 @@ public partial class EngineModuleTests
     {
         using MergeTestBlockchain? chain = await CreateBlockchain(mergeConfig: new MergeConfig()
         {
-            NewPayloadTimeout = 0.1,
-            NewPayloadCacheSize = 10
+            NewPayloadBlockProcessingTimeout = 100
         });
 
         IEngineRpcModule? rpc = chain.EngineRpcModule;
@@ -920,6 +919,24 @@ public partial class EngineModuleTests
     }
 
     [Test]
+    public async Task executePayloadV1_start_sync_if_parent_has_no_state()
+    {
+        IStateReader mockedStateReader = Substitute.For<IStateReader>();
+
+        using MergeTestBlockchain chain = await CreateBlockchain(configurer: builder => builder
+            .UpdateSingleton<IAsyncHandler<ExecutionPayload, PayloadStatusV1>>(innerBuilder => innerBuilder
+                .AddSingleton<IStateReader>(mockedStateReader)));
+
+        IEngineRpcModule rpc = chain.EngineRpcModule;
+        ExecutionPayload parent = CreateParentBlockRequestOnHead(chain.BlockTree);
+        mockedStateReader.HasStateForBlock(Arg.Any<BlockHeader?>()).Returns(false);
+
+        ExecutionPayload executionPayload = CreateBlockRequest(chain, parent, TestItem.AddressD);
+        ResultWrapper<PayloadStatusV1> resultWrapper = await rpc.engine_newPayloadV1(executionPayload);
+        resultWrapper.Data.Status.Should().Be(PayloadStatus.Syncing);
+    }
+
+    [Test]
     public async Task executePayloadV1_calculate_hash_for_cached_blocks()
     {
         using MergeTestBlockchain chain = await CreateBlockchain();
@@ -964,7 +981,6 @@ public partial class EngineModuleTests
             result.Data.PayloadId.Should().Be(null);
             testChain.BlockTree.HeadHash.Should().Be(block.BlockHash);
             testChain.BlockTree.Head!.Number.Should().Be(block.BlockNumber);
-            testChain.WorldStateManager.GlobalWorldState.StateRoot.Should().Be(testChain.BlockTree.Head!.StateRoot!);
         }
 
         async Task CanReorganizeToLastBlock(MergeTestBlockchain testChain,
@@ -996,7 +1012,6 @@ public partial class EngineModuleTests
             result.Data.PayloadId.Should().Be(null);
             testChain.BlockTree.HeadHash.Should().Be(block.BlockHash);
             testChain.BlockTree.Head!.Number.Should().Be(block.BlockNumber);
-            testChain.WorldStateManager.GlobalWorldState.StateRoot.Should().Be(testChain.BlockTree.Head!.StateRoot!);
         }
 
         IReadOnlyList<ExecutionPayload> branch1 = await ProduceBranchV1(rpc, chain, 10, CreateParentBlockRequestOnHead(chain.BlockTree), true);
@@ -1536,6 +1551,9 @@ public partial class EngineModuleTests
 
             nameof(IEngineRpcModule.engine_getPayloadV4),
             nameof(IEngineRpcModule.engine_newPayloadV4),
+
+            nameof(IEngineRpcModule.engine_getPayloadV5),
+            nameof(IEngineRpcModule.engine_getBlobsV2)
         };
         Assert.That(result, Is.EquivalentTo(expectedMethods));
     }

@@ -26,6 +26,8 @@ public class ChainSpecParamsJson
 
     public long? MinGasLimit { get; set; }
 
+    public long? MinHistoryRetentionEpochs { get; set; }
+
     public long? ForkBlock { get; set; }
 
     public Hash256 ForkCanonHash { get; set; }
@@ -146,6 +148,7 @@ public class ChainSpecParamsJson
     public Address Eip4788ContractAddress { get; set; }
     public ulong? Eip2935TransitionTimestamp { get; set; }
     public Address Eip2935ContractAddress { get; set; }
+    public long? Eip2935RingBufferSize { get; set; }
     public UInt256? Eip4844BlobGasPriceUpdateFraction { get; set; }
     public UInt256? Eip4844MinBlobGasPrice { get; set; }
     public ulong? Eip4844FeeCollectorTransitionTimestamp { get; set; }
@@ -157,6 +160,7 @@ public class ChainSpecParamsJson
     public ulong? Eip7251TransitionTimestamp { get; set; }
     public Address Eip7251ContractAddress { get; set; }
     public ulong? Eip7951TransitionTimestamp { get; set; }
+    public ulong? Rip7212TransitionTimestamp { get; set; }
     public ulong? Eip7692TransitionTimestamp { get; set; }
     public ulong? Eip7702TransitionTimestamp { get; set; }
     public ulong? Eip7883TransitionTimestamp { get; set; }
@@ -173,4 +177,5 @@ public class ChainSpecParamsJson
     public SortedSet<BlobScheduleSettings> BlobSchedule { get; set; } = [];
     public ulong? Eip7594TransitionTimestamp { get; set; }
     public ulong? Eip7939TransitionTimestamp { get; set; }
+    public ulong? Rip7728TransitionTimestamp { get; set; }
 }

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using Nethermind.Blockchain.Tracing;
 using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Producers;
 using Nethermind.Core;
@@ -80,8 +81,6 @@ public class TaikoPayloadPreparationService(
             {
                 if (worldState.HasStateForBlock(parent))
                 {
-                    worldState.SetBaseBlock(parent);
-
                     return processor.Process(block, ProcessingOptions.ProducingBlock, NullBlockTracer.Instance, token)
                         ?? throw new InvalidOperationException("Block processing failed");
                 }
@@ -125,6 +124,7 @@ public class TaikoPayloadPreparationService(
         int transactionsCheck = rlpStream.Position + transactionsSequenceLength;
 
         int txCount = rlpStream.PeekNumberOfItemsRemaining(transactionsCheck);
+        rlpStream.GuardLimit(txCount);
 
         Transaction[] transactions = new Transaction[txCount];
         int txIndex = 0;

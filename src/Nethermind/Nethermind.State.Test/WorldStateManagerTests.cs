@@ -1,13 +1,16 @@
 // SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using Autofac;
 using FluentAssertions;
 using Nethermind.Blockchain;
+using Nethermind.Blockchain.Synchronization;
 using Nethermind.Config;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Test.Builders;
+using Nethermind.Core.Test.Db;
 using Nethermind.Core.Test.Modules;
 using Nethermind.Db;
 using Nethermind.Logging;
@@ -25,7 +28,7 @@ public class WorldStateManagerTests
     [Test]
     public void ShouldProxyGlobalWorldState()
     {
-        IVisitingWorldState worldState = Substitute.For<IVisitingWorldState>();
+        IWorldState worldState = Substitute.For<IWorldState>();
         IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
         IDbProvider dbProvider = TestMemDbProvider.Init();
         WorldStateManager worldStateManager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
@@ -36,7 +39,7 @@ public class WorldStateManagerTests
     [Test]
     public void ShouldProxyReorgBoundaryEvent()
     {
-        IVisitingWorldState worldState = Substitute.For<IVisitingWorldState>();
+        IWorldState worldState = Substitute.For<IWorldState>();
         IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
         IDbProvider dbProvider = TestMemDbProvider.Init();
         WorldStateManager worldStateManager = new WorldStateManager(worldState, trieStore, dbProvider, LimboLogs.Instance);
@@ -52,7 +55,7 @@ public class WorldStateManagerTests
     [TestCase(INodeStorage.KeyScheme.HalfPath, false)]
     public void ShouldNotSupportHashLookupOnHalfpath(INodeStorage.KeyScheme keyScheme, bool hashSupported)
     {
-        IVisitingWorldState worldState = Substitute.For<IVisitingWorldState>();
+        IWorldState worldState = Substitute.For<IWorldState>();
         IPruningTrieStore trieStore = Substitute.For<IPruningTrieStore>();
         IReadOnlyTrieStore readOnlyTrieStore = Substitute.For<IReadOnlyTrieStore>();
         trieStore.AsReadOnly().Returns(readOnlyTrieStore);
@@ -74,10 +77,10 @@ public class WorldStateManagerTests
     public void ShouldAnnounceReorgOnDispose()
     {
         int lastBlock = 256;
-        int reorgDepth = 128; // Default reorg depth with snap serving
 
         IBlockTree blockTree = Substitute.For<IBlockTree>();
         IConfigProvider configProvider = new ConfigProvider();
+        int reorgDepth = configProvider.GetConfig<ISyncConfig>().SnapServingMaxDepth;
 
         {
             using IContainer ctx = new ContainerBuilder()
@@ -87,17 +90,30 @@ public class WorldStateManagerTests
 
             IWorldState worldState = ctx.Resolve<IWorldStateManager>().GlobalWorldState;
 
-            worldState.SetBaseBlock(null);
+            Hash256 stateRoot;
 
-            worldState.CreateAccount(TestItem.AddressA, 1, 2);
-            worldState.Commit(Cancun.Instance);
-            worldState.CommitTree(1);
+            using (worldState.BeginScope(IWorldState.PreGenesis))
+            {
+                worldState.CreateAccount(TestItem.AddressA, 1, 2);
+                worldState.Commit(Cancun.Instance);
+                worldState.CommitTree(1);
+                stateRoot = worldState.StateRoot;
+            }
 
             for (int i = 2; i <= lastBlock; i++)
             {
-                worldState.IncrementNonce(TestItem.AddressA, 1);
-                worldState.Commit(Cancun.Instance);
-                worldState.CommitTree(i);
+                BlockHeader baseBlock = Build.A.BlockHeader
+                    .WithStateRoot(stateRoot)
+                    .WithNumber(i - 1)
+                    .TestObject;
+
+                using (worldState.BeginScope(baseBlock))
+                {
+                    worldState.IncrementNonce(TestItem.AddressA, 1);
+                    worldState.Commit(Cancun.Instance);
+                    worldState.CommitTree(i);
+                    stateRoot = worldState.StateRoot;
+                }
             }
         }
 

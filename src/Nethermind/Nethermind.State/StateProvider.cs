@@ -21,9 +21,9 @@ using Nethermind.Core.Specs;
 using Nethermind.Evm.Tracing.State;
 using Nethermind.Int256;
 using Nethermind.Logging;
+using Nethermind.Serialization.Rlp;
 using Nethermind.Trie;
 using Nethermind.Trie.Pruning;
-
 using Metrics = Nethermind.Db.Metrics;
 using static Nethermind.State.StateProvider;
 
@@ -40,7 +40,8 @@ namespace Nethermind.State
         // Note:
         // False negatives are fine as they will just result in a overwrite set
         // False positives would be problematic as the code _must_ be persisted
-        private readonly ClockKeyCacheNonConcurrent<ValueHash256> _codeInsertFilter = new(1_024);
+        private readonly ClockKeyCacheNonConcurrent<ValueHash256> _persistedCodeInsertFilter = new(1_024);
+        private readonly ClockKeyCacheNonConcurrent<ValueHash256> _blockCodeInsertFilter = new(256);
         private readonly Dictionary<AddressAsKey, ChangeTrace> _blockChanges = new(4_096);
         private readonly ConcurrentDictionary<AddressAsKey, Account>? _preBlockCache;
 
@@ -114,15 +115,6 @@ namespace Nethermind.State
                 ? _changes[value.Peek()]!.ChangeType != ChangeType.Delete
                 : GetAndAddToCache(address) is not null;
 
-        public bool IsEmptyAccount(Address address)
-        {
-            Account? account = GetThroughCache(address);
-            return account?.IsEmpty ?? ThrowIfNull(address);
-
-            [DoesNotReturn, StackTraceHidden]
-            static bool ThrowIfNull(Address address) => throw new InvalidOperationException($"Account {address} is null when checking if empty");
-        }
-
         public Account GetAccount(Address address) => GetThroughCache(address) ?? Account.TotallyEmpty;
 
         public bool IsDeadAccount(Address address)
@@ -160,7 +152,7 @@ namespace Nethermind.State
             // Don't reinsert if already inserted. This can be the case when the same
             // code is used by multiple deployments. Either from factory contracts (e.g. LPs)
             // or people copy and pasting popular contracts
-            if (!_codeInsertFilter.Get(codeHash))
+            if (!_blockCodeInsertFilter.Get(codeHash) && !_persistedCodeInsertFilter.Get(codeHash))
             {
                 if (_codeBatch is null)
                 {
@@ -178,7 +170,7 @@ namespace Nethermind.State
                     _codeBatchAlternate[codeHash] = code.ToArray();
                 }
 
-                _codeInsertFilter.Set(codeHash);
+                _blockCodeInsertFilter.Set(codeHash);
                 inserted = true;
             }
 
@@ -493,6 +485,29 @@ namespace Nethermind.State
                 => _logger.Trace($"Creating account: {address} with balance {balance.ToHexString(skipLeadingZeros: true)} and nonce {nonce.ToHexString(skipLeadingZeros: true)}");
         }
 
+        public void CreateEmptyAccountIfDeletedOrNew(Address address)
+        {
+            if (_intraTxCache.TryGetValue(address, out Stack<int> value))
+            {
+                //we only want to persist empty accounts if they were deleted or created as empty
+                //we don't want to do it for account empty due to a change (e.g. changed balance to zero)
+                var lastChange = _changes[value.Peek()];
+                if (lastChange.ChangeType == ChangeType.Delete ||
+                    (lastChange.ChangeType is ChangeType.Touch or ChangeType.New && lastChange.Account.IsEmpty))
+                {
+                    _needsStateRootUpdate = true;
+                    if (_logger.IsTrace) Trace(address);
+
+                    Account account = Account.TotallyEmpty;
+                    PushRecreateEmpty(address, account, value);
+                }
+            }
+
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            void Trace(Address address)
+                => _logger.Trace($"Creating zombie account: {address}");
+        }
+
         public void CreateAccountIfNotExists(Address address, in UInt256 balance, in UInt256 nonce = default)
         {
             if (!AccountExists(address))
@@ -533,6 +548,8 @@ namespace Nethermind.State
                 {
                     FlushToTree();
                 }
+
+                codeFlushTask.GetAwaiter().GetResult();
                 return;
             }
 
@@ -612,6 +629,14 @@ namespace Nethermind.State
 
                             break;
                         }
+                    case ChangeType.RecreateEmpty:
+                        {
+                            if (isTracing) TraceCreate(change);
+                            SetState(change.Address, change.Account);
+                            trace?.AddToTrace(change.Address, change.Account);
+
+                            break;
+                        }
                     case ChangeType.Delete:
                         {
                             if (isTracing) TraceRemove(change);
@@ -671,6 +696,12 @@ namespace Nethermind.State
                         }
                     }
 
+                    // Mark all inserted codes as persisted
+                    foreach (var kvp in dict)
+                    {
+                        _persistedCodeInsertFilter.Set(kvp.Key.Value.ValueHash256);
+                    }
+
                     // Reuse Dictionary if not already re-initialized
                     dict.Clear();
                     if (Interlocked.CompareExchange(ref _codeBatch, dict, null) is null)
@@ -717,13 +748,21 @@ namespace Nethermind.State
         {
             int writes = 0;
             int skipped = 0;
-            foreach (var key in _blockChanges.Keys)
+
+            using ArrayPoolListRef<PatriciaTree.BulkSetEntry> bulkWrite = new(_blockChanges.Count);
+            foreach (AddressAsKey key in _blockChanges.Keys)
             {
-                ref var change = ref CollectionsMarshal.GetValueRefOrNullRef(_blockChanges, key);
+                ref ChangeTrace change = ref CollectionsMarshal.GetValueRefOrNullRef(_blockChanges, key);
                 if (change.Before != change.After)
                 {
                     change.Before = change.After;
-                    _tree.Set(key, change.After);
+
+                    KeccakCache.ComputeTo(key.Value.Bytes, out ValueHash256 keccak);
+
+                    var account = change.After;
+                    Rlp accountRlp = account is null ? null : account.IsTotallyEmpty ? StateTree.EmptyAccountRlp : Rlp.Encode(account);
+
+                    bulkWrite.Add(new PatriciaTree.BulkSetEntry(keccak, accountRlp?.Bytes));
                     writes++;
                 }
                 else
@@ -731,6 +770,8 @@ namespace Nethermind.State
                     skipped++;
                 }
             }
+
+            _tree.BulkSet(bulkWrite);
 
             if (writes > 0)
                 Metrics.IncrementStateTreeWrites(writes);
@@ -858,6 +899,12 @@ namespace Nethermind.State
             _changes.Add(new Change(address, account, ChangeType.New));
         }
 
+        private void PushRecreateEmpty(Address address, Account account, Stack<int> stack)
+        {
+            stack.Push(_changes.Count);
+            _changes.Add(new Change(address, account, ChangeType.RecreateEmpty));
+        }
+
         private Stack<int> SetupCache(Address address)
         {
             ref Stack<int>? value = ref CollectionsMarshal.GetValueRefOrAddDefault(_intraTxCache, address, out bool exists);
@@ -892,6 +939,7 @@ namespace Nethermind.State
             if (_logger.IsTrace) Trace();
             if (resetBlockChanges)
             {
+                _blockCodeInsertFilter.Clear();
                 _blockChanges.Clear();
                 _codeBatch?.Clear();
             }
@@ -941,7 +989,8 @@ namespace Nethermind.State
             Touch,
             Update,
             New,
-            Delete
+            Delete,
+            RecreateEmpty,
         }
 
         private readonly struct Change(Address address, Account? account, ChangeType type)

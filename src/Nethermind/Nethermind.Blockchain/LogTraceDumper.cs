@@ -1,17 +1,17 @@
-// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-
+using Nethermind.Blockchain.Tracing;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Evm.Tracing;
-using Nethermind.Evm.Tracing.GethStyle;
-using Nethermind.Evm.Tracing.ParityStyle;
+using Nethermind.Blockchain.Tracing.GethStyle;
+using Nethermind.Blockchain.Tracing.ParityStyle;
 using Nethermind.Logging;
 using Nethermind.Serialization.Json;
 using Nethermind.Serialization.Rlp;
@@ -48,7 +48,7 @@ public static class BlockTraceDumper
 
     public static void LogDiagnosticTrace(
         IBlockTracer blockTracer,
-        object blocksOrHash,
+        Either<Hash256, IList<Block>> blocksOrHash,
         ILogger logger)
     {
         string fileName = string.Empty;
@@ -94,9 +94,9 @@ public static class BlockTraceDumper
         }
     }
 
-    private static bool GetConditionAndHashString(object blocksOrHash, out string condition, out string blockHash)
+    private static bool GetConditionAndHashString(Either<Hash256, IList<Block>> blocksOrHash, out string condition, out string blockHash)
     {
-        if (blocksOrHash is Hash256 failedBlockHash)
+        if (blocksOrHash.Is(out Hash256 failedBlockHash))
         {
             condition = "invalid";
             blockHash = failedBlockHash.ToString();
@@ -104,7 +104,7 @@ public static class BlockTraceDumper
         }
         else
         {
-            List<Block> blocks = blocksOrHash as List<Block>;
+            blocksOrHash.To(out IList<Block> blocks);
             condition = "valid on rerun";
 
             if (blocks.Count == 1)

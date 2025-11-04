@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Consensus.Validators;
+using Nethermind.Core.Test.Db;
 using Nethermind.Db;
 using Nethermind.Logging;
 using Nethermind.Evm.State;
@@ -13,12 +14,36 @@ namespace Nethermind.Core.Test;
 
 public static class TestWorldStateFactory
 {
-    public static WorldStateManager CreateForTest()
+    public static IWorldState CreateForTest()
     {
         return CreateForTest(TestMemDbProvider.Init(), LimboLogs.Instance);
     }
 
-    public static WorldStateManager CreateForTest(IDbProvider dbProvider, ILogManager logManager)
+    public static IWorldState CreateForTest(IDbProvider dbProvider, ILogManager logManager)
+    {
+        IPruningTrieStore trieStore = new TrieStore(
+            new NodeStorage(dbProvider.StateDb),
+            No.Pruning,
+            Persist.EveryBlock,
+            new PruningConfig(),
+            LimboLogs.Instance);
+        return new WorldState(trieStore, dbProvider.CodeDb, logManager);
+    }
+
+    public static (IWorldState, IStateReader) CreateForTestWithStateReader(IDbProvider? dbProvider = null, ILogManager? logManager = null)
+    {
+        if (dbProvider is null) dbProvider = TestMemDbProvider.Init();
+        if (logManager is null) logManager = LimboLogs.Instance;
+        IPruningTrieStore trieStore = new TrieStore(
+            new NodeStorage(dbProvider.StateDb),
+            No.Pruning,
+            Persist.EveryBlock,
+            new PruningConfig(),
+            LimboLogs.Instance);
+        return (new WorldState(trieStore, dbProvider.CodeDb, logManager), new StateReader(trieStore, dbProvider.CodeDb, logManager));
+    }
+
+    public static WorldStateManager CreateWorldStateManagerForTest(IDbProvider dbProvider, ILogManager logManager)
     {
         IPruningTrieStore trieStore = new TrieStore(
             new NodeStorage(dbProvider.StateDb),

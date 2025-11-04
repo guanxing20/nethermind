@@ -65,19 +65,16 @@ public class MergePluginTests
                 LimboLogs.Instance))
             .AddSingleton<IRpcModuleProvider>(Substitute.For<IRpcModuleProvider>())
             .AddModule(new HealthCheckPluginModule()) // The merge RPC require it.
+            .AddSingleton<IBlockProcessingQueue>(Substitute.For<IBlockProcessingQueue>())
             .OnBuild((ctx) =>
             {
                 INethermindApi api = ctx.Resolve<INethermindApi>();
                 Build.MockOutNethermindApi((NethermindApi)api);
 
                 api.BlockProcessingQueue?.IsEmpty.Returns(true);
-                api.DbFactory = new MemDbFactory();
             })
             .Build();
     }
-
-    [TearDown]
-    public void TearDown() => _plugin.DisposeAsync().GetAwaiter().GetResult();
 
     [Test]
     public void SlotPerSeconds_has_different_value_in_mergeConfig_and_blocksConfig()
@@ -105,7 +102,6 @@ public class MergePluginTests
         Assert.DoesNotThrowAsync(async () => await _plugin.Init(api));
         Assert.DoesNotThrowAsync(async () => await _plugin.InitNetworkProtocol());
         Assert.DoesNotThrow(() => _plugin.InitBlockProducer(_consensusPlugin!));
-        Assert.DoesNotThrowAsync(async () => await _plugin.DisposeAsync());
     }
 
     [Test]
@@ -121,7 +117,6 @@ public class MergePluginTests
         Assert.That(api.GossipPolicy.CanGossipBlocks, Is.True);
         _plugin.InitBlockProducer(_consensusPlugin!);
         Assert.That(api.BlockProducer, Is.InstanceOf<MergeBlockProducer>());
-        await _plugin.DisposeAsync();
     }
 
     [TestCase(true, true)]

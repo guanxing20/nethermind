@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using Nethermind.Core;
+using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Test;
@@ -18,6 +21,7 @@ using Nethermind.Specs.Forks;
 using Nethermind.Evm.State;
 using Nethermind.State;
 using Nethermind.Trie.Pruning;
+using Nethermind.Trie.Test.Pruning;
 using NUnit.Framework;
 
 namespace Nethermind.Trie.Test
@@ -1095,8 +1099,7 @@ namespace Nethermind.Trie.Test
 
             Queue<BlockHeader> rootQueue = new();
 
-            IWorldStateManager worldStateManager = TestWorldStateFactory.CreateForTest();
-            IWorldState stateProvider = worldStateManager.GlobalWorldState;
+            IWorldState stateProvider = TestWorldStateFactory.CreateForTest();
 
             Account[] accounts = new Account[accountsCount];
             Address[] addresses = new Address[accountsCount];
@@ -1116,8 +1119,11 @@ namespace Nethermind.Trie.Test
                 addresses[i] = TestItem.GetRandomAddress(_random);
             }
 
+            BlockHeader? baseBlock = null;
             for (int blockNumber = 0; blockNumber < blocksCount; blockNumber++)
             {
+                using var _ = stateProvider.BeginScope(baseBlock);
+
                 bool isEmptyBlock = _random.Next(5) == 0;
                 if (!isEmptyBlock)
                 {
@@ -1171,11 +1177,12 @@ namespace Nethermind.Trie.Test
 
                 stateProvider.CommitTree(blockNumber);
 
+                baseBlock = Build.A.BlockHeader.WithStateRoot(stateProvider.StateRoot).WithNumber(blockNumber)
+                    .TestObject;
+
                 if (blockNumber > blocksCount - Reorganization.MaxDepth)
                 {
-                    rootQueue.Enqueue(
-                        Build.A.BlockHeader.WithStateRoot(stateProvider.StateRoot).WithNumber(blockNumber).TestObject
-                    );
+                    rootQueue.Enqueue(baseBlock);
                 }
             }
 
@@ -1184,11 +1191,11 @@ namespace Nethermind.Trie.Test
 
             int verifiedBlocks = 0;
 
-            while (rootQueue.TryDequeue(out BlockHeader baseBlock))
+            while (rootQueue.TryDequeue(out baseBlock))
             {
                 try
                 {
-                    stateProvider.SetBaseBlock(baseBlock);
+                    using var _ = stateProvider.BeginScope(baseBlock);
                     for (int i = 0; i < addresses.Length; i++)
                     {
                         if (stateProvider.AccountExists(addresses[i]))
@@ -1214,6 +1221,54 @@ namespace Nethermind.Trie.Test
 
                 verifiedBlocks++;
             }
+        }
+
+        [Test]
+        public void Can_parallel_read_trees()
+        {
+            int itemCount = 1024;
+            int repetition = 100;
+
+            using TrieStore trieStore = new TrieStore(
+                new NodeStorage(new MemDb()),
+                new TestPruningStrategy(shouldPrune: true),
+                Persist.EveryBlock,
+                new PruningConfig(),
+                LimboLogs.Instance
+            );
+
+            PatriciaTree tree = new PatriciaTree(trieStore, LimboLogs.Instance);
+
+            using ArrayPoolList<(Hash256, Hash256)> kv = new ArrayPoolList<(Hash256, Hash256)>(itemCount);
+
+            Span<byte> buffer = stackalloc byte[32];
+            for (int i = 0; i < itemCount; i++)
+            {
+                BinaryPrimitives.WriteInt32BigEndian(buffer, i);
+                Hash256 key = Keccak.Compute(buffer);
+                key.Bytes[..8].Fill(0);
+                kv.Add((key, Keccak.Compute(buffer)));
+            }
+
+            foreach (var it in kv)
+            {
+                (Hash256 key, Hash256 value) = it;
+                tree.Set(key.Bytes, value.BytesToArray());
+            }
+
+            using (trieStore.BeginBlockCommit(0))
+            {
+                tree.Commit();
+            }
+
+            Parallel.For(0, repetition, (index, _) =>
+            {
+                foreach (var it in kv)
+                {
+                    (Hash256 key, Hash256 value) = it;
+                    tree.Get(key.Bytes).ToArray().Should().BeEquivalentTo(value.BytesToArray());
+                }
+            });
         }
     }
 }

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Blockchain.Tracing;
 using Nethermind.Core;
 using Nethermind.Evm.State;
 using Nethermind.Evm.Tracing;
@@ -16,7 +17,7 @@ internal static class TransactionProcessorAdapterExtensions
         ProcessingOptions processingOptions,
         IWorldState stateProvider)
     {
-        if (processingOptions.ContainsFlag(ProcessingOptions.DoNotVerifyNonce) && currentTx.SenderAddress != Address.SystemUser)
+        if (processingOptions.ContainsFlag(ProcessingOptions.LoadNonceFromState) && currentTx.SenderAddress != Address.SystemUser)
         {
             currentTx.Nonce = stateProvider.GetNonce(currentTx.SenderAddress!);
         }

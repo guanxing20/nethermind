@@ -14,7 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Nethermind.Core.Test.IO;
-using Nethermind.Evm.Tracing.GethStyle;
+using Nethermind.Blockchain.Tracing.GethStyle;
 using Nethermind.JsonRpc.Modules;
 using Nethermind.JsonRpc.WebSockets;
 using Nethermind.Logging;
@@ -27,6 +27,7 @@ using NUnit.Framework;
 namespace Nethermind.JsonRpc.Test;
 
 [TestFixture]
+[Parallelizable(ParallelScope.Children)]
 public class JsonRpcSocketsClientTests
 {
     public class UsingIpc

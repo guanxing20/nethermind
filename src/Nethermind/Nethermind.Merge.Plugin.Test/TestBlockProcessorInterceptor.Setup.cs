@@ -11,13 +11,13 @@ using Nethermind.Evm.Tracing;
 
 namespace Nethermind.Merge.Plugin.Test;
 
-public class TestBlockProcessorInterceptor : IBlockProcessor
+public class TestBranchProcessorInterceptor : IBranchProcessor
 {
-    private readonly IBlockProcessor _blockProcessorImplementation;
+    private readonly IBranchProcessor _blockProcessorImplementation;
     public int DelayMs { get; set; }
     public Exception? ExceptionToThrow { get; set; }
 
-    public TestBlockProcessorInterceptor(IBlockProcessor baseBlockProcessor, int delayMs)
+    public TestBranchProcessorInterceptor(IBranchProcessor baseBlockProcessor, int delayMs)
     {
         _blockProcessorImplementation = baseBlockProcessor;
         DelayMs = delayMs;
@@ -54,11 +54,5 @@ public class TestBlockProcessorInterceptor : IBlockProcessor
     {
         add => _blockProcessorImplementation.BlockProcessed += value;
         remove => _blockProcessorImplementation.BlockProcessed -= value;
-    }
-
-    public event EventHandler<TxProcessedEventArgs>? TransactionProcessed
-    {
-        add => _blockProcessorImplementation.TransactionProcessed += value;
-        remove => _blockProcessorImplementation.TransactionProcessed -= value;
     }
 }

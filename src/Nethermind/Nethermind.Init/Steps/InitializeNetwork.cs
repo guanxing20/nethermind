@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
@@ -16,7 +16,6 @@ using Nethermind.Network;
 using Nethermind.Network.Config;
 using Nethermind.Network.Contract.P2P;
 using Nethermind.Network.Discovery;
-using Nethermind.Network.P2P.Subprotocols.Eth;
 using Nethermind.Stats;
 using Nethermind.Stats.Model;
 using Nethermind.Synchronization;
@@ -192,10 +191,10 @@ public class InitializeNetwork : IStep
 
         ProductInfo.InitializePublicClientId(_networkConfig.PublicClientIdFormat);
 
-        ThisNodeInfo.AddInfo("Ethereum     :", $"tcp://{_api.Enode.HostIp}:{_api.Enode.Port}");
+        ThisNodeInfo.AddInfo("Ethereum     :", $"tcp://{_api.Enode.HostIp}:{_api.Enode.Port} ");
         ThisNodeInfo.AddInfo("Client id    :", ProductInfo.ClientId);
         ThisNodeInfo.AddInfo("Public id    :", ProductInfo.PublicClientId);
-        ThisNodeInfo.AddInfo("This node    :", $"{_api.Enode.Info}");
+        ThisNodeInfo.AddInfo("This node    :", $"{_api.Enode.Info} ");
         ThisNodeInfo.AddInfo("Node address :", $"{_api.Enode.Address} (do not use as an account)");
     }
 
@@ -275,14 +274,12 @@ public class InitializeNetwork : IStep
             _api.PeerManager!,
             _networkConfig,
             _api.LogManager);
-        PooledTxsRequestor pooledTxsRequestor = new(_api.TxPool!, _api.Config<ITxPoolConfig>(), _api.SpecProvider);
 
         _api.ProtocolsManager = new ProtocolsManager(
             _api.SyncPeerPool!,
             syncServer,
             _api.BackgroundTaskScheduler,
             _api.TxPool,
-            pooledTxsRequestor,
             _discoveryApp,
             _api.MessageSerializationService,
             _api.RlpxPeer,
@@ -293,6 +290,8 @@ public class InitializeNetwork : IStep
             _api.GossipPolicy,
             _api.WorldStateManager!,
             _api.LogManager,
+            _api.Config<ITxPoolConfig>(),
+            _api.SpecProvider,
             _api.TxGossipPolicy);
 
         if (_syncConfig.SnapServingEnabled == true)
